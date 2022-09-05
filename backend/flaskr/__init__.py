@@ -1,4 +1,5 @@
 import os
+from unittest import result
 from flask import Flask, request, abort, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
@@ -48,14 +49,14 @@ def create_app(test_config=None):
     """
     @app.route('/categories')
     def retrieve_categories():
-        selection = Category.query.order_by(Category.id).all()
+        categories = Category.query.order_by(Category.id).all()
 
-        if len(selection) == 0:
+        if len(categories) == 0:
             abort(404)
 
         return jsonify({
             'success': True,
-            'categories': {category.id: category.type for category in selection}
+            'categories': {category.id: category.type for category in categories}
         })
 
 
@@ -73,20 +74,22 @@ def create_app(test_config=None):
     """
     @app.route('/questions')
     def retrieve_questions():
-        selection = Question.query.order_by(Question.id).all()
-        current_questions = paginate_questions(request, selection)
+        try:
+            selection = Question.query.order_by(Question.id).all()
+            currentQuestions = paginate_questions(request, selection)
+            categories = Category.query.order_by(Category.id).all()
+            
+            if len(currentQuestions) == 0:
+                abort(404)
 
-        categories = Category.query.order_by(Category.id).all()
-
-        if len(current_questions) == 0:
+            return jsonify({
+                'success': True,
+                'questions': currentQuestions,
+                'total_questions': len(selection),
+                'categories': {category.id: category.type for category in categories}
+                })
+        except:
             abort(404)
-
-        return jsonify({
-            'success': True,
-            'questions': current_questions,
-            'total_questions': len(Question.query.all()),
-            'categories': {category.id: category.type for category in categories}
-        })
 
     """
     @TODO:
@@ -95,21 +98,18 @@ def create_app(test_config=None):
     TEST: When you click the trash icon next to a question, the question will be removed.
     This removal will persist in the database and when you refresh the page.
     """
-    @app.route('/questions/<int:question_id>', methods=['DELETE'])
-    def delete_questions(question_id):
+    @app.route('/questions/<int:quest_id>', methods=['DELETE'])
+    def delete_questions(quest_id):
         try:
-            question = Question.query.filter(Question.id == question_id).one_or_none()
-
+            # question = Question.query.filter_by(Question.id==quest_id).one_or_none()
+            question = Question.query.get(quest_id)
             if question is None:
                 abort(404)
 
             question.delete()
-            selection = Question.query.order_by(Question.id).all()
-            current_questions = paginate_questions(request, selection)
             return jsonify({
                 'success': True,
-                'deleted': question_id,
-                'questions': current_questions,
+                'deleted': quest_id,
                 'total_questions': len(Question.query.all())
             })
 
@@ -128,22 +128,16 @@ def create_app(test_config=None):
     """
     @app.route("/questions", methods=['POST'])
     def create_question():
-        body = request.get_json()
-
-        new_question = body.get('question', None)
-        new_answer = body.get('answer', None)
-        new_category = body.get('category', None)
-        new_difficulty = body.get('difficulty', None)
 
         try:
             question = Question(
-                question=new_question,
-                answer=new_answer,
-                category=new_category,
-                difficulty=new_difficulty
+                question=request.get_json()['question'],
+                answer=request.get_json()['answer'],
+                category=request.get_json()['category'],
+                difficulty=request.get_json()['difficulty']
             )
-            question.insert()
 
+            question.insert()
             selection = Question.query.order_by(Question.id).all()
             current_questions = paginate_questions(request, selection)
 
@@ -168,21 +162,20 @@ def create_app(test_config=None):
     Try using the word "title" to start.
     """
     @app.route('/questions/search', methods=['POST'])
-    def search_questions():
-        body = request.get_json()
+    def search():
+        data = request.get_json()
 
-        search = body.get('searchTerm', None)
+        search = data.get('searchTerm')
+        selections = Question.query.order_by(Question.id).filter(Question.question.ilike('%{}%'.format(search))).all()
 
-        if search:
-            selection = Question.query.order_by(Question.id).filter(Question.question.ilike('%{}%'.format(search)))
-            current_questions = paginate_questions(request, selection)
+        if selections:
+            current_questions = paginate_questions(request, selections)
 
             return jsonify({
                 'success': True,
                 'questions': current_questions,
-                'total_questions': len(selection.all())
+                'total_questions': len(selections)
             })
-
         else:
             abort(404)
 
@@ -198,11 +191,11 @@ def create_app(test_config=None):
     def retrieve_questions_by_category(category_id):
         try:
             selection = Question.query.filter(Question.category == str(category_id)).all()
-            current_questions = paginate_questions(request, selection)
+            currentQuestions = paginate_questions(request, selection)
 
             return jsonify({
                 'success': True,
-                'questions': current_questions,
+                'questions': currentQuestions,
                 'total_questions': len(selection),
                 'current_category': category_id
             })
@@ -222,34 +215,31 @@ def create_app(test_config=None):
     and shown whether they were correct or not.
     """
     @app.route('/quizzes', methods=['POST'])
-    def play_quiz():
+    def quiz():
         try:
-            body = request.get_json()
+            quizCategory = request.get_json()['quiz_category']
+            previousQuestions = request.get_json()['previous_questions']
+            
+            categoryId = quizCategory['id']
+            if categoryId == 0:
+                questions = Question.query.filter(Question.id.notin_(previousQuestions)).all()
 
-            category = body.get('quiz_category', None)
-            previous_questions = body.get('previous_questions', None)
-
-            if category['id'] == 0:
-                available_questions = Question.query.filter(Question.id.notin_(previous_questions)).all()
             else:
-                available_questions = Question.query.filter(
-                    Question.category == str(category['id'])
-                ).filter(
-                    Question.id.notin_(previous_questions)
-                ).all()
-
-            if len(available_questions) > 0:
-                new_question = available_questions[random.randrange(0, len(available_questions))].format()
-            else:
-                new_question = None
+                questions = Question.query.filter(Question.id.notin_(previousQuestions),
+                Question.category == categoryId).all()
+            
+            question = None
+            if(questions):
+                question = random.choice(questions)
 
             return jsonify({
                 'success': True,
-                'question': new_question
+                'question': question.format()
             })
 
         except:
             abort(422)
+
 
     """
     @TODO:
